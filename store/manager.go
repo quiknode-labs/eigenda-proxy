@@ -39,9 +39,9 @@ type Manager struct {
 
 	s3 *s3.Store // for op keccak256 commitment
 	// For op generic commitments & standard commitments
-	eigenda          common.EigenDAStore // v0 da commitment version
-	eigendaV2        common.EigenDAStore // v1 da commitment version
-	dispersalBackend atomic.Value        // stores the EigenDABackend to write blobs to
+	eigenda          common.EigenDAV1Store // v0 version byte
+	eigendaV2        common.EigenDAV2Store // >= v1 version bytes
+	dispersalBackend atomic.Value          // stores the EigenDABackend to write blobs to
 
 	// secondary storage backends (caching and fallbacks)
 	secondary secondary.ISecondary
@@ -67,8 +67,8 @@ func (m *Manager) SetDispersalBackend(backend common.EigenDABackend) {
 
 // NewManager ... Init
 func NewManager(
-	eigenda common.EigenDAStore,
-	eigenDAV2 common.EigenDAStore,
+	eigenda common.EigenDAV1Store,
+	eigenDAV2 common.EigenDAV2Store,
 	s3 *s3.Store,
 	l logging.Logger,
 	secondary secondary.ISecondary,
@@ -129,10 +129,12 @@ func (m *Manager) Get(ctx context.Context,
 		// 2 - read blob from EigenDA
 		data, err := m.getFromCorrectEigenDABackend(ctx, versionedCert, verifyOpts)
 		if err == nil {
+			if m.secondary.WriteOnCacheMissEnabled() {
+				m.backupToSecondary(ctx, versionedCert.SerializedCert, data)
+			}
+
 			return data, nil
 		}
-
-		m.log.Error(err.Error())
 
 		// 3 - read blob from fallbacks if enabled and data is non-retrievable from EigenDA
 		if m.secondary.FallbackEnabled() {
@@ -173,23 +175,28 @@ func (m *Manager) Put(ctx context.Context, cm commitments.CommitmentMode, value 
 	}
 
 	// 2 - Put blob into secondary storage backends
-	if m.secondary.Enabled() &&
-		m.secondary.AsyncWriteEntry() { // publish put notification to secondary's subscription on PutNotify topic
+	if m.secondary.Enabled() {
+		m.backupToSecondary(ctx, commit, value)
+	}
+
+	return commit, nil
+}
+
+func (m *Manager) backupToSecondary(ctx context.Context, commitment []byte, value []byte) {
+	if m.secondary.AsyncWriteEntry() { // publish put notification to secondary's subscription on PutNotify topic
 		m.log.Debug("Publishing data to async secondary stores")
 		m.secondary.Topic() <- secondary.PutNotify{
-			Commitment: commit,
+			Commitment: commitment,
 			Value:      value,
 		}
 		// secondary is available only for synchronous writes
-	} else if m.secondary.Enabled() && !m.secondary.AsyncWriteEntry() {
+	} else {
 		m.log.Debug("Publishing data to single threaded secondary stores")
-		err := m.secondary.HandleRedundantWrites(ctx, commit, value)
+		err := m.secondary.HandleRedundantWrites(ctx, commitment, value)
 		if err != nil {
 			m.log.Error("Secondary insertions failed", "error", err.Error())
 		}
 	}
-
-	return commit, nil
 }
 
 // getVerifyMethod returns the correct verify method based on commitment type
@@ -197,11 +204,15 @@ func (m *Manager) getVerifyMethod(commitmentType certs.VersionByte) (
 	func(context.Context, []byte, []byte, common.CertVerificationOpts) error,
 	error,
 ) {
+	v2VerifyWrapper := func(ctx context.Context, cert []byte, payload []byte, opts common.CertVerificationOpts) error {
+		return m.eigendaV2.Verify(ctx, certs.NewVersionedCert(cert, commitmentType), opts)
+	}
+
 	switch commitmentType {
 	case certs.V0VersionByte:
 		return m.eigenda.Verify, nil
-	case certs.V1VersionByte:
-		return m.eigendaV2.Verify, nil
+	case certs.V1VersionByte, certs.V2VersionByte:
+		return v2VerifyWrapper, nil
 	default:
 		return nil, fmt.Errorf("commitment version unknown: %b", commitmentType)
 	}
@@ -252,16 +263,17 @@ func (m *Manager) getFromCorrectEigenDABackend(
 
 		return nil, err
 
-	case certs.V1VersionByte:
+	case certs.V1VersionByte, certs.V2VersionByte:
+
 		// The cert must be verified before attempting to get the data, since the GET logic
 		// assumes the cert is valid. Verify v2 doesn't require a payload.
-		err := m.eigendaV2.Verify(ctx, versionedCert.SerializedCert, nil, verifyOpts)
+		err := m.eigendaV2.Verify(ctx, versionedCert, verifyOpts)
 		if err != nil {
 			return nil, fmt.Errorf("verify EigenDACert: %w", err)
 		}
 
 		m.log.Debug("Reading blob from EigenDAV2 backend")
-		data, err := m.eigendaV2.Get(ctx, versionedCert.SerializedCert)
+		data, err := m.eigendaV2.Get(ctx, versionedCert)
 		if err != nil {
 			return nil, fmt.Errorf("get data from V2 backend: %w", err)
 		}
