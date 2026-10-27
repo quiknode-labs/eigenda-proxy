@@ -7,9 +7,7 @@
 //    In some cases, it might make sense to have an api or clientapi or similar directory with its own go.mod, or to separate out that clientapi into its own repository.
 module github.com/Layr-Labs/eigenda-proxy/clients
 
-go 1.22
-
-toolchain go1.22.7
+go 1.24
 
 require github.com/testcontainers/testcontainers-go v0.35.0
 
@@ -33,7 +31,7 @@ require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/klauspost/compress v1.17.4 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
@@ -65,10 +63,8 @@ require (
 )
 
 // See https://go.dev/ref/mod#go-mod-file-retract for more information about the retract directive.
-retract (
-	// We published a `clients/v1.0.1` tag by mistake, which got picked up by pkg.go.dev, and now
-	// the latest version of the docs (pointed to in our README) leads to https://pkg.go.dev/github.com/Layr-Labs/eigenda-proxy/clients@v1.0.1/standard_client.
-	// This directive retracts that version, such that the docs (and go commands) no longer point to this version (at this point v0.2.0 is the latest).
-	// Once we reach semver v1.0.1, we can possibly remove this retract directive (??), or just skip this number and go to v1.0.2.
-    v1.0.1
-)
+// We published a `clients/v1.0.1` tag by mistake, which got picked up by pkg.go.dev, and now
+// the latest version of the docs (pointed to in our README) leads to https://pkg.go.dev/github.com/Layr-Labs/eigenda-proxy/clients@v1.0.1/standard_client.
+// This directive retracts that version, such that the docs (and go commands) no longer point to this version (at this point v0.2.0 is the latest).
+// Once we reach semver v1.0.1, we can possibly remove this retract directive (??), or just skip this number and go to v1.0.2.
+retract v1.0.1
